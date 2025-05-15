@@ -1,10 +1,12 @@
 ﻿// 트레이 아이콘 기반 키 자동 입력 프로그램 (WinForms 기반)
-// Visual Studio 프로젝트로 생성 후 Program.cs 교체용 코드
 
 using System;
 using System.Windows.Forms;
 using System.Timers;
 using System.Runtime.InteropServices;
+using System.Drawing;
+using WindowsInput;
+using WindowsInput.Native;
 
 class Program
 {
@@ -27,11 +29,11 @@ class Program
 
         // 타이머 설정
         System.Timers.Timer timer4 = new System.Timers.Timer(1 * 60 * 1000); // 1분
-        timer4.Elapsed += (s, e) => SendKey('4', 4);
+        timer4.Elapsed += (s, e) => SendKey(VirtualKeyCode.VK_4, 8);
         timer4.Start();
 
         System.Timers.Timer timer30 = new System.Timers.Timer(25 * 60 * 1000); // 25분
-        timer30.Elapsed += (s, e) => SendKey('8', 2);
+        timer30.Elapsed += (s, e) => SendKey(VirtualKeyCode.VK_8, 2);
         timer30.Start();
 
         Application.Run();
@@ -42,12 +44,14 @@ class Program
         timer30.Stop();
     }
 
-    static void SendKey(char keyChar, int repeat)
+    static void SendKey(VirtualKeyCode key, int repeat)
     {
+        var sim = new InputSimulator();
         for (int i = 0; i < repeat; i++)
         {
-            SendKeys.SendWait(keyChar.ToString());
+            sim.Keyboard.KeyPress(key);
             System.Threading.Thread.Sleep(200);
         }
     }
+
 }
