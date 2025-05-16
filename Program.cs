@@ -1,10 +1,12 @@
-﻿// 트레이 아이콘 기반 키 자동 입력 프로그램 (WinForms 기반, SendInput 직접 호출 + 수동 토글 기능)
+﻿// 트레이 아이콘 기반 키 자동 입력 프로그램 (WinForms 기반, keybd_event 기반 입력 방식 + 디버깅 로그 출력)
 
 using System;
 using System.Windows.Forms;
 using System.Timers;
 using System.Runtime.InteropServices;
 using System.Drawing;
+using System.Diagnostics;
+using System.Threading;
 
 class Program
 {
@@ -25,6 +27,8 @@ class Program
             isRunning = !isRunning;
             toggleItem.Text = isRunning ? "⏸ 일시정지 (클릭 시 토글)" : "▶ 시작 (클릭 시 토글)";
             trayIcon.Text = isRunning ? "자동 입력 실행 중" : "자동 입력 일시정지";
+
+            ShowLog(isRunning ? "자동 입력 시작됨" : "자동 입력 정지됨");
         };
         menu.Items.Add(toggleItem);
 
@@ -38,79 +42,43 @@ class Program
         trayIcon.ContextMenuStrip = menu;
 
         // 타이머 설정
-        System.Timers.Timer timer4 = new System.Timers.Timer(1 * 60 * 1000); // 1분
-        timer4.Elapsed += (s, e) => { if (isRunning) SendKey(0x34, 8); }; // '4' 키
-        timer4.Start();
+        System.Timers.Timer timer1 = new System.Timers.Timer(1 * 60 * 1000); // 1분
+        timer1.Elapsed += (s, e) => { if (isRunning) SendKeyLowLevel(0x34, 8); }; // '4' 키
+        timer1.Start();
 
-        System.Timers.Timer timer30 = new System.Timers.Timer(25 * 60 * 1000); // 25분
-        timer30.Elapsed += (s, e) => { if (isRunning) SendKey(0x38, 2); }; // '8' 키
-        timer30.Start();
+        System.Timers.Timer timer20 = new System.Timers.Timer(20 * 60 * 1000); // 25분
+        timer20.Elapsed += (s, e) => { if (isRunning) SendKeyLowLevel(0x38, 2); }; // '8' 키
+        timer20.Start();
 
+        ShowLog("프로그램이 시작되었습니다. 트레이 아이콘을 확인하세요.");
         Application.Run();
 
         // 종료 시 리소스 정리
         trayIcon.Visible = false;
-        timer4.Stop();
-        timer30.Stop();
+        timer1.Stop();
+        timer20.Stop();
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    struct INPUT
-    {
-        public uint type;
-        public InputUnion u;
-    }
+    [DllImport("user32.dll")]
+    static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
-    [StructLayout(LayoutKind.Explicit)]
-    struct InputUnion
-    {
-        [FieldOffset(0)] public KEYBDINPUT ki;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    struct KEYBDINPUT
-    {
-        public ushort wVk;
-        public ushort wScan;
-        public uint dwFlags;
-        public uint time;
-        public IntPtr dwExtraInfo;
-    }
-
-    const int INPUT_KEYBOARD = 1;
     const uint KEYEVENTF_KEYUP = 0x0002;
 
-    [DllImport("user32.dll", SetLastError = true)]
-    static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-
-    static void SendKey(ushort keyCode, int repeat)
+    static void SendKeyLowLevel(byte keyCode, int repeat)
     {
+        ShowLog($"[SendKeyLowLevel] VK: 0x{keyCode:X2}, 반복: {repeat}회");
+
         for (int i = 0; i < repeat; i++)
         {
-            INPUT[] inputs = new INPUT[2];
-
-            inputs[0].type = INPUT_KEYBOARD;
-            inputs[0].u.ki = new KEYBDINPUT
-            {
-                wVk = keyCode,
-                wScan = 0,
-                dwFlags = 0,
-                time = 0,
-                dwExtraInfo = IntPtr.Zero
-            };
-
-            inputs[1].type = INPUT_KEYBOARD;
-            inputs[1].u.ki = new KEYBDINPUT
-            {
-                wVk = keyCode,
-                wScan = 0,
-                dwFlags = KEYEVENTF_KEYUP,
-                time = 0,
-                dwExtraInfo = IntPtr.Zero
-            };
-
-            SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
-            System.Threading.Thread.Sleep(200);
+            keybd_event(keyCode, 0, 0, UIntPtr.Zero); // key down
+            Thread.Sleep(250);
+            keybd_event(keyCode, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // key up
+            Thread.Sleep(400);
         }
+    }
+
+    static void ShowLog(string message)
+    {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
     }
 }
