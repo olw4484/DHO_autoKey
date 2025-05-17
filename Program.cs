@@ -1,10 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Linq;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using OpenCvSharp;
+using OpenCvSharp.Extensions;
 
 namespace AutoFlagTrainer
 {
@@ -29,13 +31,14 @@ namespace AutoFlagTrainer
         private ContextMenu trayMenu;
         private MenuItem toggleItem;
         private DateTime lastEnergyUse;
+        private DateTime lastExtraUse;
         private Random rand = new Random();
         private bool isRunning = false;
+        private readonly string logPath = "debug_log.txt";
 
         public MainForm()
         {
             trayMenu = new ContextMenu();
-
             toggleItem = new MenuItem("▶ 시작", (s, e) => ToggleRunning());
             trayMenu.MenuItems.Add(toggleItem);
             trayMenu.MenuItems.Add("종료", OnExit);
@@ -49,9 +52,12 @@ namespace AutoFlagTrainer
             };
 
             lastEnergyUse = DateTime.Now;
+            lastExtraUse = DateTime.Now;
             ShowInTaskbar = false;
             WindowState = FormWindowState.Minimized;
             Visible = false;
+
+            Log("프로그램 시작됨.");
         }
 
         protected override void OnLoad(EventArgs e)
@@ -68,15 +74,28 @@ namespace AutoFlagTrainer
                 {
                     if (IsWhiteFlag())
                     {
+                        Log("[감지] 흰 깃발 인식됨");
                         PressRandomKey(0x33, 0x34); // 3 or 4
                         await Task.Delay(2000);
                         PressRandomKey(0x31, 0x32); // 1 or 2
                     }
+                    else
+                    {
+                        Log("[감지] 흰 깃발 없음");
+                    }
 
                     if ((DateTime.Now - lastEnergyUse).TotalSeconds > 240)
                     {
+                        Log("[행동력] 7 또는 8 입력됨");
                         PressRandomKey(0x37, 0x38); // 7 or 8
                         lastEnergyUse = DateTime.Now;
+                    }
+
+                    if ((DateTime.Now - lastExtraUse).TotalMinutes > 10)
+                    {
+                        Log("[보조키] 5 또는 6 입력됨");
+                        PressRandomKey(0x35, 0x36); // 5 or 6
+                        lastExtraUse = DateTime.Now;
                     }
                 }
 
@@ -89,11 +108,13 @@ namespace AutoFlagTrainer
             isRunning = !isRunning;
             toggleItem.Text = isRunning ? "■ 정지" : "▶ 시작";
             trayIcon.Text = isRunning ? "AutoFlagTrainer - 실행 중" : "AutoFlagTrainer - 정지됨";
+            Log(isRunning ? "[상태] 자동 실행 시작됨" : "[상태] 자동 실행 중지됨");
         }
 
         private void PressRandomKey(byte key1, byte key2)
         {
             byte key = rand.Next(2) == 0 ? key1 : key2;
+            Log($"[입력] 키 입력: {key} (VK: 0x{key:X2})");
             keybd_event(key, 0, 0, 0);
             Task.Delay(50).Wait();
             keybd_event(key, 0, KEYEVENTF_KEYUP, 0);
@@ -101,7 +122,16 @@ namespace AutoFlagTrainer
 
         private bool IsWhiteFlag()
         {
-            Rectangle region = new Rectangle(940, 480, 40, 40);
+            int screenW = Screen.PrimaryScreen.Bounds.Width;
+            int screenH = Screen.PrimaryScreen.Bounds.Height;
+
+            int left = (int)(screenW * 0.47);  // 약 900
+            int top = (int)(screenH * 0.20);   // 약 240
+            int width = (int)(screenW * 0.06); // 약 110
+            int height = (int)(screenH * 0.35); // 약 420
+
+            Rectangle region = new Rectangle(left, top, width, height);
+
             using (Bitmap screen = new Bitmap(region.Width, region.Height))
             using (Graphics g = Graphics.FromImage(screen))
             {
@@ -112,34 +142,67 @@ namespace AutoFlagTrainer
 
         private bool IsWhiteFlagFromImage(Bitmap bmp)
         {
-            List<Color> pixels = new List<Color>();
-            int cx = bmp.Width / 2, cy = bmp.Height / 2;
-            for (int dy = -1; dy <= 1; dy++)
+            try
             {
-                for (int dx = -1; dx <= 1; dx++)
+                Mat screenMat = BitmapConverter.ToMat(bmp);
+                if (screenMat.Channels() == 4)
+                    Cv2.CvtColor(screenMat, screenMat, ColorConversionCodes.BGRA2BGR);
+                else if (screenMat.Channels() == 1)
+                    Cv2.CvtColor(screenMat, screenMat, ColorConversionCodes.GRAY2BGR);
+                string[] templateFiles = {
+            "image/white_flag1.png",
+            "image/white_flag2.png",
+            "image/white_flag3.png",
+            "image/white_flag4.png"
+        };
+
+                foreach (string path in templateFiles)
                 {
-                    pixels.Add(bmp.GetPixel(cx + dx, cy + dy));
+                    string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, path);
+                    Mat raw = Cv2.ImRead(fullPath, ImreadModes.Unchanged);
+                    if (raw.Empty())
+                    {
+                        Log($"[오류] 템플릿 로드 실패: {path}");
+                        continue;
+                    }
+
+                    Mat template = new Mat();
+                    if (raw.Channels() == 4)
+                        Cv2.CvtColor(raw, template, ColorConversionCodes.BGRA2BGR);
+                    else if (raw.Channels() == 1)
+                        Cv2.CvtColor(raw, template, ColorConversionCodes.GRAY2BGR);
+                    else
+                        template = raw.Clone();
+
+                    Mat result = new Mat();
+                    Cv2.MatchTemplate(screenMat, template, result, TemplateMatchModes.CCoeffNormed);
+                    Cv2.MinMaxLoc(result, out _, out double maxVal, out _, out _);
+                    Log($"[감지] {path} 유사도 = {maxVal:F4}");
+
+                    if (maxVal > 0.45)
+                        return true; // 하나라도 통과하면 감지 성공
                 }
+
+                return false;
             }
-
-            double avgR = pixels.Average(c => c.R);
-            double avgG = pixels.Average(c => c.G);
-            double avgB = pixels.Average(c => c.B);
-
-            double distToWhite = ColorDistance(avgR, avgG, avgB, 240, 240, 240);
-            double distToBlue = ColorDistance(avgR, avgG, avgB, 60, 90, 180);
-
-            return distToWhite < distToBlue && distToWhite < 60;
+            catch (Exception ex)
+            {
+                Log("[예외] 템플릿 감지 오류: " + ex.Message);
+                return false;
+            }
         }
 
-        private double ColorDistance(double r1, double g1, double b1, double r2, double g2, double b2)
+
+        private void Log(string message)
         {
-            return Math.Sqrt(Math.Pow(r1 - r2, 2) + Math.Pow(g1 - g2, 2) + Math.Pow(b1 - b2, 2));
+            string logLine = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
+            File.AppendAllText(logPath, logLine + Environment.NewLine);
         }
 
         private void OnExit(object sender, EventArgs e)
         {
             trayIcon.Visible = false;
+            Log("프로그램 종료됨.");
             Application.Exit();
         }
     }
