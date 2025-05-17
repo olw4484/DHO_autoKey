@@ -1,84 +1,146 @@
-﻿// 트레이 아이콘 기반 키 자동 입력 프로그램 (WinForms 기반, keybd_event 기반 입력 방식 + 디버깅 로그 출력)
-
-using System;
-using System.Windows.Forms;
-using System.Timers;
-using System.Runtime.InteropServices;
+﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
-using System.Diagnostics;
-using System.Threading;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using System.Windows.Forms;
 
-class Program
+namespace AutoFlagTrainer
 {
-    static bool isRunning = false; // 자동 입력 실행 여부 상태 변수
-
-    [STAThread]
-    static void Main()
+    static class Program
     {
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-
-        NotifyIcon trayIcon = new NotifyIcon();
-        ContextMenuStrip menu = new ContextMenuStrip();
-
-        ToolStripMenuItem toggleItem = new ToolStripMenuItem("▶ 시작 (클릭 시 토글)");
-        toggleItem.Click += (s, e) =>
+        [STAThread]
+        static void Main()
         {
-            isRunning = !isRunning;
-            toggleItem.Text = isRunning ? "⏸ 일시정지 (클릭 시 토글)" : "▶ 시작 (클릭 시 토글)";
-            trayIcon.Text = isRunning ? "자동 입력 실행 중" : "자동 입력 일시정지";
-
-            ShowLog(isRunning ? "자동 입력 시작됨" : "자동 입력 정지됨");
-        };
-        menu.Items.Add(toggleItem);
-
-        ToolStripMenuItem exitItem = new ToolStripMenuItem("종료");
-        exitItem.Click += (s, e) => Application.Exit();
-        menu.Items.Add(exitItem);
-
-        trayIcon.Icon = SystemIcons.Information;
-        trayIcon.Text = "자동 입력 일시정지";
-        trayIcon.Visible = true;
-        trayIcon.ContextMenuStrip = menu;
-
-        // 타이머 설정
-        System.Timers.Timer timer1 = new System.Timers.Timer(1 * 60 * 1000); // 1분
-        timer1.Elapsed += (s, e) => { if (isRunning) SendKeyLowLevel(0x34, 8); }; // '4' 키
-        timer1.Start();
-
-        System.Timers.Timer timer20 = new System.Timers.Timer(20 * 60 * 1000); // 25분
-        timer20.Elapsed += (s, e) => { if (isRunning) SendKeyLowLevel(0x38, 2); }; // '8' 키
-        timer20.Start();
-
-        ShowLog("프로그램이 시작되었습니다. 트레이 아이콘을 확인하세요.");
-        Application.Run();
-
-        // 종료 시 리소스 정리
-        trayIcon.Visible = false;
-        timer1.Stop();
-        timer20.Stop();
-    }
-
-    [DllImport("user32.dll")]
-    static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
-    const uint KEYEVENTF_KEYUP = 0x0002;
-
-    static void SendKeyLowLevel(byte keyCode, int repeat)
-    {
-        ShowLog($"[SendKeyLowLevel] VK: 0x{keyCode:X2}, 반복: {repeat}회");
-
-        for (int i = 0; i < repeat; i++)
-        {
-            keybd_event(keyCode, 0, 0, UIntPtr.Zero); // key down
-            Thread.Sleep(250);
-            keybd_event(keyCode, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // key up
-            Thread.Sleep(400);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MainForm());
         }
     }
 
-    static void ShowLog(string message)
+    public class MainForm : Form
     {
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
+        [DllImport("user32.dll")]
+        static extern void keybd_event(byte bVk, byte bScan, int dwFlags, int dwExtraInfo);
+        const int KEYEVENTF_KEYUP = 0x0002;
+
+        private NotifyIcon trayIcon;
+        private ContextMenu trayMenu;
+        private MenuItem toggleItem;
+        private DateTime lastEnergyUse;
+        private Random rand = new Random();
+        private bool isRunning = false;
+
+        public MainForm()
+        {
+            trayMenu = new ContextMenu();
+
+            toggleItem = new MenuItem("▶ 시작", (s, e) => ToggleRunning());
+            trayMenu.MenuItems.Add(toggleItem);
+            trayMenu.MenuItems.Add("종료", OnExit);
+
+            trayIcon = new NotifyIcon()
+            {
+                Text = "AutoFlagTrainer",
+                Icon = SystemIcons.Application,
+                ContextMenu = trayMenu,
+                Visible = true
+            };
+
+            lastEnergyUse = DateTime.Now;
+            ShowInTaskbar = false;
+            WindowState = FormWindowState.Minimized;
+            Visible = false;
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            StartLoop();
+        }
+
+        private async void StartLoop()
+        {
+            while (true)
+            {
+                if (isRunning)
+                {
+                    if (IsWhiteFlag())
+                    {
+                        PressRandomKey(0x33, 0x34); // 3 or 4
+                        await Task.Delay(2000);
+                        PressRandomKey(0x31, 0x32); // 1 or 2
+                    }
+
+                    if ((DateTime.Now - lastEnergyUse).TotalSeconds > 240)
+                    {
+                        PressRandomKey(0x37, 0x38); // 7 or 8
+                        lastEnergyUse = DateTime.Now;
+                    }
+                }
+
+                await Task.Delay(500);
+            }
+        }
+
+        private void ToggleRunning()
+        {
+            isRunning = !isRunning;
+            toggleItem.Text = isRunning ? "■ 정지" : "▶ 시작";
+            trayIcon.Text = isRunning ? "AutoFlagTrainer - 실행 중" : "AutoFlagTrainer - 정지됨";
+        }
+
+        private void PressRandomKey(byte key1, byte key2)
+        {
+            byte key = rand.Next(2) == 0 ? key1 : key2;
+            keybd_event(key, 0, 0, 0);
+            Task.Delay(50).Wait();
+            keybd_event(key, 0, KEYEVENTF_KEYUP, 0);
+        }
+
+        private bool IsWhiteFlag()
+        {
+            Rectangle region = new Rectangle(940, 480, 40, 40);
+            using (Bitmap screen = new Bitmap(region.Width, region.Height))
+            using (Graphics g = Graphics.FromImage(screen))
+            {
+                g.CopyFromScreen(region.X, region.Y, 0, 0, region.Size);
+                return IsWhiteFlagFromImage(screen);
+            }
+        }
+
+        private bool IsWhiteFlagFromImage(Bitmap bmp)
+        {
+            List<Color> pixels = new List<Color>();
+            int cx = bmp.Width / 2, cy = bmp.Height / 2;
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    pixels.Add(bmp.GetPixel(cx + dx, cy + dy));
+                }
+            }
+
+            double avgR = pixels.Average(c => c.R);
+            double avgG = pixels.Average(c => c.G);
+            double avgB = pixels.Average(c => c.B);
+
+            double distToWhite = ColorDistance(avgR, avgG, avgB, 240, 240, 240);
+            double distToBlue = ColorDistance(avgR, avgG, avgB, 60, 90, 180);
+
+            return distToWhite < distToBlue && distToWhite < 60;
+        }
+
+        private double ColorDistance(double r1, double g1, double b1, double r2, double g2, double b2)
+        {
+            return Math.Sqrt(Math.Pow(r1 - r2, 2) + Math.Pow(g1 - g2, 2) + Math.Pow(b1 - b2, 2));
+        }
+
+        private void OnExit(object sender, EventArgs e)
+        {
+            trayIcon.Visible = false;
+            Application.Exit();
+        }
     }
 }
