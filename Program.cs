@@ -91,7 +91,7 @@ namespace AutoFlagTrainer
                         lastEnergyUse = DateTime.Now;
                     }
 
-                    if ((DateTime.Now - lastExtraUse).TotalMinutes > 10)
+                    if ((DateTime.Now - lastExtraUse).TotalSeconds > 40)
                     {
                         Log("[보조키] 5 또는 6 입력됨");
                         PressRandomKey(0x35, 0x36); // 5 or 6
@@ -99,7 +99,7 @@ namespace AutoFlagTrainer
                     }
                 }
 
-                await Task.Delay(500);
+                await Task.Delay(1000);
             }
         }
 
@@ -145,21 +145,22 @@ namespace AutoFlagTrainer
             try
             {
                 Mat screenMat = BitmapConverter.ToMat(bmp);
+
                 if (screenMat.Channels() == 4)
                     Cv2.CvtColor(screenMat, screenMat, ColorConversionCodes.BGRA2BGR);
                 else if (screenMat.Channels() == 1)
                     Cv2.CvtColor(screenMat, screenMat, ColorConversionCodes.GRAY2BGR);
-                string[] templateFiles = {
-            "image/white_flag1.png",
-            "image/white_flag2.png",
-            "image/white_flag3.png",
-            "image/white_flag4.png"
-        };
+
+                string templateDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "image");
+                string[] templateFiles = Directory.GetFiles(templateDir, "white_flag*.png");
+
+                int strongMatches = 0;
+                int moderateMatches = 0;
+                double totalSim = 0;
 
                 foreach (string path in templateFiles)
                 {
-                    string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, path);
-                    Mat raw = Cv2.ImRead(fullPath, ImreadModes.Unchanged);
+                    Mat raw = Cv2.ImRead(path, ImreadModes.Unchanged);
                     if (raw.Empty())
                     {
                         Log($"[오류] 템플릿 로드 실패: {path}");
@@ -177,13 +178,18 @@ namespace AutoFlagTrainer
                     Mat result = new Mat();
                     Cv2.MatchTemplate(screenMat, template, result, TemplateMatchModes.CCoeffNormed);
                     Cv2.MinMaxLoc(result, out _, out double maxVal, out _, out _);
-                    Log($"[감지] {path} 유사도 = {maxVal:F4}");
+                    Log($"[감지] {Path.GetFileName(path)} 유사도 = {maxVal:F4}");
 
-                    if (maxVal > 0.45)
-                        return true; // 하나라도 통과하면 감지 성공
+                    totalSim += maxVal;
+                    if (maxVal >= 0.6) strongMatches++;
+                    if (maxVal >= 0.5) moderateMatches++;
                 }
 
-                return false;
+                double avgSim = totalSim / Math.Max(templateFiles.Length, 1);
+                Log($"[감지] strong={strongMatches}, moderate={moderateMatches}, avg={(totalSim / templateFiles.Length):F4}");
+
+                return strongMatches >= 1 || (moderateMatches >= 4 && avgSim >= 0.35);
+
             }
             catch (Exception ex)
             {
@@ -191,7 +197,6 @@ namespace AutoFlagTrainer
                 return false;
             }
         }
-
 
         private void Log(string message)
         {
